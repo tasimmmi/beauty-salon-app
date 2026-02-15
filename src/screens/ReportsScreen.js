@@ -5,18 +5,24 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Dimensions
+  Dimensions,
+  Alert
 } from 'react-native';
-import { LineChart, PieChart } from 'react-native-chart-kit';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
 export default function ReportsScreen() {
-  const { currentUser, appointments, materials, finances, clients } = useApp();
+  const { currentUser, appointments, materials, finances, services } = useApp();
   const [period, setPeriod] = useState('month');
   const [reportType, setReportType] = useState('finance');
 
   const screenWidth = Dimensions.get('window').width - 40;
+
+  // Безопасное получение данных с проверками
+  const safeAppointments = appointments || [];
+  const safeMaterials = materials || [];
+  const safeFinances = finances || [];
+  const safeServices = services || [];
 
   const getPeriodData = () => {
     const now = new Date();
@@ -32,26 +38,29 @@ export default function ReportsScreen() {
       case 'year':
         startDate = new Date(now.setFullYear(now.getFullYear() - 1));
         break;
+      case 'all':
+        startDate = new Date(2020, 0, 1); // С 1 января 2020 года
+        break;
       default:
         startDate = new Date(now.setMonth(now.getMonth() - 1));
     }
 
     return {
-      appointments: appointments.filter(a => 
-        a.cosmetologistId === currentUser?.id && 
-        new Date(a.date) >= startDate
+      appointments: safeAppointments.filter(a => 
+        a?.cosmetologistId === currentUser?.id && 
+        new Date(a?.date) >= startDate
       ),
-      materials: materials.filter(m => 
-        (m.owner === 'common' || m.owner === currentUser?.id) &&
-        m.isPurchase &&
-        new Date(m.purchaseDate) >= startDate
+      materials: safeMaterials.filter(m => 
+        (m?.owner === 'common' || m?.owner === currentUser?.id) &&
+        m?.isPurchase &&
+        new Date(m?.purchaseDate) >= startDate
       ),
-      finances: finances.filter(f => 
-        (f.owner === 'common' || f.owner === currentUser?.id) &&
-        new Date(f.date) >= startDate
+      finances: safeFinances.filter(f => 
+        (f?.owner === 'common' || f?.owner === currentUser?.id) &&
+        new Date(f?.date) >= startDate
       ),
-      clients: clients.filter(c => 
-        c.cosmetologistId === currentUser?.id
+      services: safeServices.filter(s => 
+        s?.cosmetologistId === currentUser?.id
       )
     };
   };
@@ -64,104 +73,166 @@ export default function ReportsScreen() {
         return calculateFinanceReport(data);
       case 'materials':
         return calculateMaterialsReport(data);
-      case 'clients':
-        return calculateClientsReport(data);
       default:
         return calculateFinanceReport(data);
     }
   };
 
   const calculateFinanceReport = (data) => {
-    const income = data.finances
-      .filter(f => f.type === 'income')
-      .reduce((sum, f) => sum + f.amount, 0);
+    const income = (data.finances || [])
+      .filter(f => f?.type === 'income')
+      .reduce((sum, f) => sum + (f?.amount || 0), 0);
     
-    const expenses = data.finances
-      .filter(f => f.type === 'expense')
-      .reduce((sum, f) => sum + f.amount, 0);
+    const expenses = (data.finances || [])
+      .filter(f => f?.type === 'expense')
+      .reduce((sum, f) => sum + (f?.amount || 0), 0);
     
-    const appointmentsIncome = data.appointments
-      .reduce((sum, a) => sum + parseFloat(a.price || 0), 0);
+    const appointmentsIncome = (data.appointments || [])
+      .filter(a => a?.status === 'completed')
+      .reduce((sum, a) => sum + (parseFloat(a?.price) || 0), 0);
     
-    const materialsExpenses = data.materials
-      .reduce((sum, m) => sum + (m.price * m.quantity), 0);
+    const materialsExpenses = (data.materials || [])
+      .reduce((sum, m) => sum + ((m?.price || 0) * (m?.quantity || 0)), 0);
+
+    const totalIncome = income + appointmentsIncome;
+    const totalExpenses = expenses + materialsExpenses;
+    const profit = totalIncome - totalExpenses;
+
+    // Статистика по статусам
+    const totalAppointments = data.appointments?.length || 0;
+    const completedAppointments = (data.appointments || []).filter(a => a?.status === 'completed').length;
+    const cancelledAppointments = (data.appointments || []).filter(a => a?.status === 'cancelled').length;
+    const scheduledAppointments = (data.appointments || []).filter(a => a?.status === 'scheduled').length;
+    const confirmedAppointments = (data.appointments || []).filter(a => a?.status === 'confirmed').length;
 
     return {
-      totalIncome: income + appointmentsIncome,
-      totalExpenses: expenses + materialsExpenses,
-      profit: (income + appointmentsIncome) - (expenses + materialsExpenses),
-      appointmentsCount: data.appointments.length,
+      totalIncome,
+      totalExpenses,
+      profit,
+      appointmentsCount: totalAppointments,
+      completedAppointments,
+      cancelledAppointments,
+      scheduledAppointments,
+      confirmedAppointments,
       appointmentsIncome,
       materialsExpenses,
       otherIncome: income,
-      otherExpenses: expenses
+      otherExpenses: expenses,
+      averageBill: totalAppointments > 0 
+        ? (appointmentsIncome / totalAppointments).toFixed(2)
+        : 0,
+      completionRate: totalAppointments > 0
+        ? ((completedAppointments / totalAppointments) * 100).toFixed(1)
+        : 0
     };
   };
 
   const calculateMaterialsReport = (data) => {
     const materialsByCategory = {};
+    let totalSpent = 0;
     
-    data.materials.forEach(m => {
-      if (!materialsByCategory[m.category]) {
-        materialsByCategory[m.category] = {
+    (data.materials || []).forEach(m => {
+      const category = m?.category || 'other';
+      const cost = (m?.price || 0) * (m?.quantity || 0);
+      totalSpent += cost;
+      
+      if (!materialsByCategory[category]) {
+        materialsByCategory[category] = {
           count: 0,
           totalCost: 0,
           items: []
         };
       }
-      materialsByCategory[m.category].count += m.quantity;
-      materialsByCategory[m.category].totalCost += m.price * m.quantity;
-      materialsByCategory[m.category].items.push(m);
+      materialsByCategory[category].count += m?.quantity || 0;
+      materialsByCategory[category].totalCost += cost;
+      materialsByCategory[category].items.push(m);
     });
 
-    return materialsByCategory;
-  };
-
-  const calculateClientsReport = (data) => {
-    const newClients = data.clients.filter(c => 
-      new Date(c.createdAt) >= new Date(new Date().setMonth(new Date().getMonth() - 1))
-    ).length;
-
-    const totalVisits = data.appointments.length;
-    const averageBill = data.appointments.length > 0
-      ? data.appointments.reduce((sum, a) => sum + parseFloat(a.price || 0), 0) / data.appointments.length
-      : 0;
-
     return {
-      totalClients: data.clients.length,
-      newClients,
-      totalVisits,
-      averageBill,
-      frequentClients: data.clients.filter(c => c.visits?.length >= 3).length
+      byCategory: materialsByCategory,
+      totalSpent,
+      totalItems: (data.materials || []).reduce((sum, m) => sum + (m?.quantity || 0), 0)
     };
   };
 
   const report = calculateReport();
 
+  const formatDuration = (minutes) => {
+    if (!minutes) return '0 мин';
+    if (minutes < 60) return `${minutes} мин`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours} ч ${mins} мин` : `${hours} ч`;
+  };
+
+  const formatCurrency = (value) => {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency: 'RUB',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(value || 0);
+  };
+
+  const getPeriodLabel = () => {
+    switch(period) {
+      case 'week': return 'За последнюю неделю';
+      case 'month': return 'За последний месяц';
+      case 'year': return 'За последний год';
+      case 'all': return 'За все время';
+      default: return 'За выбранный период';
+    }
+  };
+
   const renderFinanceReport = () => (
     <View style={styles.reportContainer}>
       <Text style={styles.reportTitle}>Финансовый отчет</Text>
       
+      <View style={styles.periodSummary}>
+        <Text style={styles.periodText}>{getPeriodLabel()}</Text>
+      </View>
+      
       <View style={styles.summaryCards}>
         <View style={[styles.summaryCard, styles.incomeCard]}>
+          <Ionicons name="arrow-up" size={24} color="#4CAF50" />
           <Text style={styles.summaryLabel}>Доход</Text>
-          <Text style={styles.summaryValue}>{report.totalIncome} ₽</Text>
+          <Text style={styles.summaryValue}>{formatCurrency(report.totalIncome)}</Text>
         </View>
         
         <View style={[styles.summaryCard, styles.expenseCard]}>
+          <Ionicons name="arrow-down" size={24} color="#F44336" />
           <Text style={styles.summaryLabel}>Расход</Text>
-          <Text style={styles.summaryValue}>{report.totalExpenses} ₽</Text>
+          <Text style={styles.summaryValue}>{formatCurrency(report.totalExpenses)}</Text>
         </View>
         
         <View style={[styles.summaryCard, styles.profitCard]}>
+          <Ionicons 
+            name={report.profit >= 0 ? "trending-up" : "trending-down"} 
+            size={24} 
+            color={report.profit >= 0 ? "#4CAF50" : "#F44336"} 
+          />
           <Text style={styles.summaryLabel}>Прибыль</Text>
           <Text style={[
             styles.summaryValue,
-            styles.profitText,
             report.profit >= 0 ? styles.profitPositive : styles.profitNegative
           ]}>
-            {report.profit} ₽
+            {formatCurrency(report.profit)}
           </Text>
+        </View>
+      </View>
+
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{report.appointmentsCount}</Text>
+          <Text style={styles.statLabel}>Всего записей</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{report.completedAppointments}</Text>
+          <Text style={styles.statLabel}>Завершено</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{report.completionRate}%</Text>
+          <Text style={styles.statLabel}>Выполнения</Text>
         </View>
       </View>
 
@@ -169,153 +240,132 @@ export default function ReportsScreen() {
         <Text style={styles.detailsTitle}>Детализация</Text>
         
         <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Количество записей:</Text>
-          <Text style={styles.detailValue}>{report.appointmentsCount}</Text>
+          <Text style={styles.detailLabel}>Средний чек:</Text>
+          <Text style={styles.detailValue}>{formatCurrency(report.averageBill)}</Text>
         </View>
         
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Доход от услуг:</Text>
-          <Text style={styles.detailValue}>{report.appointmentsIncome} ₽</Text>
+          <Text style={styles.detailValue}>{formatCurrency(report.appointmentsIncome)}</Text>
         </View>
         
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Прочие доходы:</Text>
-          <Text style={styles.detailValue}>{report.otherIncome} ₽</Text>
+          <Text style={styles.detailValue}>{formatCurrency(report.otherIncome)}</Text>
         </View>
         
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Расход на материалы:</Text>
-          <Text style={styles.detailValue}>{report.materialsExpenses} ₽</Text>
+          <Text style={styles.detailValue}>{formatCurrency(report.materialsExpenses)}</Text>
         </View>
         
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>Прочие расходы:</Text>
-          <Text style={styles.detailValue}>{report.otherExpenses} ₽</Text>
+          <Text style={styles.detailValue}>{formatCurrency(report.otherExpenses)}</Text>
         </View>
       </View>
 
-      <View style={styles.chartContainer}>
-        <Text style={styles.chartTitle}>Соотношение доходов и расходов</Text>
-        <PieChart
-          data={[
-            {
-              name: 'Доходы',
-              population: report.totalIncome,
-              color: '#4CAF50',
-              legendFontColor: '#333',
-              legendFontSize: 12
-            },
-            {
-              name: 'Расходы',
-              population: report.totalExpenses,
-              color: '#F44336',
-              legendFontColor: '#333',
-              legendFontSize: 12
-            }
-          ]}
-          width={screenWidth}
-          height={220}
-          chartConfig={{
-            color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-          }}
-          accessor="population"
-          backgroundColor="transparent"
-          paddingLeft="15"
-          absolute
-        />
+      <View style={styles.statusBreakdownCard}>
+        <Text style={styles.detailsTitle}>Статусы записей</Text>
+        
+        <View style={styles.statusRow}>
+          <View style={[styles.statusDot, { backgroundColor: '#FF9800' }]} />
+          <Text style={styles.statusLabel}>Запланировано:</Text>
+          <Text style={styles.statusCount}>{report.scheduledAppointments}</Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <View style={[styles.statusDot, { backgroundColor: '#2196F3' }]} />
+          <Text style={styles.statusLabel}>Подтверждено:</Text>
+          <Text style={styles.statusCount}>{report.confirmedAppointments}</Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <View style={[styles.statusDot, { backgroundColor: '#4CAF50' }]} />
+          <Text style={styles.statusLabel}>Завершено:</Text>
+          <Text style={styles.statusCount}>{report.completedAppointments}</Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <View style={[styles.statusDot, { backgroundColor: '#F44336' }]} />
+          <Text style={styles.statusLabel}>Отменено:</Text>
+          <Text style={styles.statusCount}>{report.cancelledAppointments}</Text>
+        </View>
       </View>
+
+      {report.appointmentsCount > 0 && (
+        <View style={styles.popularServicesCard}>
+          <Text style={styles.detailsTitle}>Популярные услуги</Text>
+          <Text style={styles.comingSoonText}>
+            Статистика по услугам будет доступна после нескольких записей
+          </Text>
+        </View>
+      )}
     </View>
   );
 
   const renderMaterialsReport = () => {
     const materialsData = report;
-    const pieData = Object.keys(materialsData).map((key, index) => ({
-      name: key === 'common' ? 'Общие' : key,
-      population: materialsData[key].totalCost,
-      color: `hsl(${index * 60}, 70%, 50%)`,
-      legendFontColor: '#333',
-      legendFontSize: 12
-    }));
+    const hasData = Object.keys(materialsData.byCategory || {}).length > 0;
 
     return (
       <View style={styles.reportContainer}>
         <Text style={styles.reportTitle}>Отчет по материалам</Text>
         
-        <View style={styles.chartContainer}>
-          <Text style={styles.chartTitle}>Распределение затрат</Text>
-          {pieData.length > 0 ? (
-            <PieChart
-              data={pieData}
-              width={screenWidth}
-              height={220}
-              chartConfig={{
-                color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-              }}
-              accessor="population"
-              backgroundColor="transparent"
-              paddingLeft="15"
-              absolute
-            />
-          ) : (
-            <Text style={styles.emptyText}>Нет данных за период</Text>
-          )}
+        <View style={styles.periodSummary}>
+          <Text style={styles.periodText}>{getPeriodLabel()}</Text>
         </View>
 
-        {Object.keys(materialsData).map((category) => (
-          <View key={category} style={styles.categoryCard}>
-            <Text style={styles.categoryTitle}>
-              {category === 'common' ? 'Общие материалы' : `Материалы ${category}`}
-            </Text>
-            <View style={styles.categoryStats}>
-              <Text style={styles.categoryStat}>
-                Количество: {materialsData[category].count}
-              </Text>
-              <Text style={styles.categoryStat}>
-                Сумма: {materialsData[category].totalCost} ₽
-              </Text>
-            </View>
+        <View style={styles.materialsSummaryCards}>
+          <View style={styles.materialSummaryCard}>
+            <Ionicons name="cube" size={24} color="#9C27B0" />
+            <Text style={styles.materialSummaryLabel}>Всего закуплено</Text>
+            <Text style={styles.materialSummaryValue}>{materialsData.totalItems || 0} ед.</Text>
           </View>
-        ))}
+          
+          <View style={styles.materialSummaryCard}>
+            <Ionicons name="cash" size={24} color="#9C27B0" />
+            <Text style={styles.materialSummaryLabel}>Потрачено всего</Text>
+            <Text style={styles.materialSummaryValue}>{formatCurrency(materialsData.totalSpent || 0)}</Text>
+          </View>
+        </View>
+
+        {!hasData ? (
+          <View style={styles.emptyReportContainer}>
+            <Ionicons name="cube-outline" size={60} color="#ccc" />
+            <Text style={styles.emptyReportTitle}>Нет данных о закупках</Text>
+            <Text style={styles.emptyReportText}>
+              {period === 'all' 
+                ? 'У вас еще не было закупок материалов'
+                : 'За этот период не было закупок материалов'}
+            </Text>
+          </View>
+        ) : (
+          Object.keys(materialsData.byCategory).map((category) => (
+            <View key={category} style={styles.categoryCard}>
+              <Text style={styles.categoryTitle}>
+                {category === 'common' ? 'Общие материалы' : 
+                 category === currentUser?.id ? 'Личные материалы' :
+                 `Материалы ${category}`}
+              </Text>
+              <View style={styles.categoryStats}>
+                <View style={styles.categoryStat}>
+                  <Text style={styles.categoryStatLabel}>Количество:</Text>
+                  <Text style={styles.categoryStatValue}>{materialsData.byCategory[category].count}</Text>
+                </View>
+                <View style={styles.categoryStat}>
+                  <Text style={styles.categoryStatLabel}>Сумма:</Text>
+                  <Text style={styles.categoryStatValue}>
+                    {formatCurrency(materialsData.byCategory[category].totalCost)}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ))
+        )}
       </View>
     );
   };
-
-  const renderClientsReport = () => (
-    <View style={styles.reportContainer}>
-      <Text style={styles.reportTitle}>Отчет по клиентам</Text>
-      
-      <View style={styles.summaryCards}>
-        <View style={[styles.summaryCard, styles.clientCard]}>
-          <Text style={styles.summaryLabel}>Всего клиентов</Text>
-          <Text style={styles.summaryValue}>{report.totalClients}</Text>
-        </View>
-        
-        <View style={[styles.summaryCard, styles.newClientCard]}>
-          <Text style={styles.summaryLabel}>Новых</Text>
-          <Text style={styles.summaryValue}>{report.newClients}</Text>
-        </View>
-        
-        <View style={[styles.summaryCard, styles.visitsCard]}>
-          <Text style={styles.summaryLabel}>Визитов</Text>
-          <Text style={styles.summaryValue}>{report.totalVisits}</Text>
-        </View>
-      </View>
-
-      <View style={styles.detailsCard}>
-        <Text style={styles.detailsTitle}>Статистика</Text>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Средний чек:</Text>
-          <Text style={styles.detailValue}>{report.averageBill.toFixed(2)} ₽</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Постоянные клиенты:</Text>
-          <Text style={styles.detailValue}>{report.frequentClients}</Text>
-        </View>
-      </View>
-    </View>
-  );
 
   return (
     <View style={styles.container}>
@@ -332,8 +382,8 @@ export default function ReportsScreen() {
             ]}
             onPress={() => setReportType('finance')}
           >
-            <Icon 
-              name="account-balance-wallet" 
+            <Ionicons 
+              name="wallet-outline" 
               size={20} 
               color={reportType === 'finance' ? '#fff' : '#666'} 
             />
@@ -350,8 +400,8 @@ export default function ReportsScreen() {
             ]}
             onPress={() => setReportType('materials')}
           >
-            <Icon 
-              name="inventory" 
+            <Ionicons 
+              name="cube-outline" 
               size={20} 
               color={reportType === 'materials' ? '#fff' : '#666'} 
             />
@@ -359,24 +409,6 @@ export default function ReportsScreen() {
               styles.controlText,
               reportType === 'materials' && styles.activeControlText
             ]}>Материалы</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.controlButton,
-              reportType === 'clients' && styles.activeControl
-            ]}
-            onPress={() => setReportType('clients')}
-          >
-            <Icon 
-              name="people" 
-              size={20} 
-              color={reportType === 'clients' ? '#fff' : '#666'} 
-            />
-            <Text style={[
-              styles.controlText,
-              reportType === 'clients' && styles.activeControlText
-            ]}>Клиенты</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -420,12 +452,24 @@ export default function ReportsScreen() {
             period === 'year' && styles.activePeriodText
           ]}>Год</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.periodButton,
+            period === 'all' && styles.activePeriod
+          ]}
+          onPress={() => setPeriod('all')}
+        >
+          <Text style={[
+            styles.periodText,
+            period === 'all' && styles.activePeriodText
+          ]}>Все</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content}>
         {reportType === 'finance' && renderFinanceReport()}
         {reportType === 'materials' && renderMaterialsReport()}
-        {reportType === 'clients' && renderClientsReport()}
       </ScrollView>
     </View>
   );
@@ -434,21 +478,23 @@ export default function ReportsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff'
+    backgroundColor: '#f5f5f5'
   },
   header: {
-    padding: 15,
+    padding: 20,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0'
   },
   title: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
     color: '#333'
   },
   controls: {
     paddingHorizontal: 15,
     paddingVertical: 10,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0'
   },
@@ -457,7 +503,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f5f5f5',
     borderRadius: 25,
     marginRight: 10,
     borderWidth: 1,
@@ -478,14 +524,19 @@ const styles = StyleSheet.create({
   periodSelector: {
     flexDirection: 'row',
     padding: 15,
-    backgroundColor: '#f8f9fa'
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    flexWrap: 'wrap',
+    gap: 8
   },
   periodButton: {
     flex: 1,
+    minWidth: 70,
     paddingVertical: 10,
+    paddingHorizontal: 8,
     alignItems: 'center',
-    backgroundColor: '#fff',
-    marginHorizontal: 5,
+    backgroundColor: '#f5f5f5',
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e0e0e0'
@@ -495,7 +546,7 @@ const styles = StyleSheet.create({
     borderColor: '#9C27B0'
   },
   periodText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666'
   },
   activePeriodText: {
@@ -512,37 +563,34 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
+    marginBottom: 10
+  },
+  periodSummary: {
     marginBottom: 15
+  },
+  periodText: {
+    fontSize: 14,
+    color: '#666',
+    fontStyle: 'italic'
   },
   summaryCards: {
     flexDirection: 'row',
-    marginBottom: 20
+    marginBottom: 15,
+    gap: 8
   },
   summaryCard: {
     flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    marginHorizontal: 5,
+    borderRadius: 12,
+    padding: 12,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 5,
-    textAlign: 'center'
-  },
-  summaryValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333'
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2
   },
   incomeCard: {
     borderTopColor: '#4CAF50',
@@ -556,20 +604,16 @@ const styles = StyleSheet.create({
     borderTopColor: '#9C27B0',
     borderTopWidth: 3
   },
-  clientCard: {
-    borderTopColor: '#2196F3',
-    borderTopWidth: 3
+  summaryLabel: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 4,
+    marginBottom: 2
   },
-  newClientCard: {
-    borderTopColor: '#4CAF50',
-    borderTopWidth: 3
-  },
-  visitsCard: {
-    borderTopColor: '#FF9800',
-    borderTopWidth: 3
-  },
-  profitText: {
-    fontSize: 20
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333'
   },
   profitPositive: {
     color: '#4CAF50'
@@ -577,68 +621,176 @@ const styles = StyleSheet.create({
   profitNegative: {
     color: '#F44336'
   },
+  statsRow: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    gap: 8
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#9C27B0',
+    marginBottom: 4
+  },
+  statLabel: {
+    fontSize: 11,
+    color: '#999'
+  },
   detailsCard: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
+    backgroundColor: '#fff',
+    borderRadius: 12,
     padding: 15,
-    marginBottom: 20
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
   },
   detailsTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 15
+    marginBottom: 12
   },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0'
+    borderBottomColor: '#f0f0f0'
   },
   detailLabel: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666'
   },
   detailValue: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#333'
   },
-  chartContainer: {
-    alignItems: 'center',
-    marginBottom: 20
-  },
-  chartTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 15
-  },
-  categoryCard: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
+  statusBreakdownCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
     padding: 15,
-    marginBottom: 10
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
   },
-  categoryTitle: {
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0'
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 8
+  },
+  statusCount: {
+    marginLeft: 'auto',
+    fontWeight: '600',
+    color: '#333'
+  },
+  popularServicesCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  comingSoonText: {
+    fontSize: 13,
+    color: '#999',
+    textAlign: 'center',
+    padding: 15,
+    fontStyle: 'italic'
+  },
+  materialsSummaryCards: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    gap: 8
+  },
+  materialSummaryCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 15,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  materialSummaryLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+    marginBottom: 2
+  },
+  materialSummaryValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#9C27B0'
+  },
+  emptyReportContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  emptyReportTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 10
+    marginTop: 12,
+    marginBottom: 4
+  },
+  emptyReportText: {
+    fontSize: 13,
+    color: '#999',
+    textAlign: 'center'
+  },
+  categoryCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  categoryTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8
   },
   categoryStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between'
+    gap: 6
   },
   categoryStat: {
-    fontSize: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  categoryStatLabel: {
+    fontSize: 13,
     color: '#666'
   },
-  emptyText: {
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
-    padding: 20
+  categoryStatValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333'
   }
 });
