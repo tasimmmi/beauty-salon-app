@@ -1,16 +1,22 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const AppContext = createContext();
+const AppContext = createContext({});
 
-export const useApp = () => useContext(AppContext);
+export const useApp = () => {
+  const context = useContext(AppContext);
+  if (!context) {
+    throw new Error('useApp must be used within AppProvider');
+  }
+  return context;
+};
 
 export const AppProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [materials, setMaterials] = useState([]);
-  const [clients, setClients] = useState([]);
+  const [services, setServices] = useState([]);
   const [finances, setFinances] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -20,17 +26,19 @@ export const AppProvider = ({ children }) => {
 
   const loadData = async () => {
     try {
-      const storedUsers = await AsyncStorage.getItem('users');
-      const storedAppointments = await AsyncStorage.getItem('appointments');
-      const storedMaterials = await AsyncStorage.getItem('materials');
-      const storedClients = await AsyncStorage.getItem('clients');
-      const storedFinances = await AsyncStorage.getItem('finances');
+      const [usersData, appointmentsData, materialsData, servicesData, financesData] = await Promise.all([
+        AsyncStorage.getItem('users'),
+        AsyncStorage.getItem('appointments'),
+        AsyncStorage.getItem('materials'),
+        AsyncStorage.getItem('services'),
+        AsyncStorage.getItem('finances')
+      ]);
 
-      if (storedUsers) setUsers(JSON.parse(storedUsers));
-      if (storedAppointments) setAppointments(JSON.parse(storedAppointments));
-      if (storedMaterials) setMaterials(JSON.parse(storedMaterials));
-      if (storedClients) setClients(JSON.parse(storedClients));
-      if (storedFinances) setFinances(JSON.parse(storedFinances));
+      if (usersData) setUsers(JSON.parse(usersData));
+      if (appointmentsData) setAppointments(JSON.parse(appointmentsData));
+      if (materialsData) setMaterials(JSON.parse(materialsData));
+      if (servicesData) setServices(JSON.parse(servicesData));
+      if (financesData) setFinances(JSON.parse(financesData));
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -38,15 +46,6 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  const saveData = async (key, data) => {
-    try {
-      await AsyncStorage.setItem(key, JSON.stringify(data));
-    } catch (error) {
-      console.error('Error saving data:', error);
-    }
-  };
-
-  // User methods
   const login = async (username, password) => {
     const user = users.find(u => u.username === username && u.password === password);
     if (user) {
@@ -60,39 +59,85 @@ export const AppProvider = ({ children }) => {
     setCurrentUser(null);
   };
 
-  // Appointment methods
+  // Функция для проверки доступности времени с учетом длительности
+  const checkTimeAvailability = (date, startTime, duration) => {
+    const [startHour, startMinute] = startTime.split(':').map(Number);
+    const newStart = startHour * 60 + startMinute;
+    const newEnd = newStart + duration;
+
+    // Проверяем все записи на эту дату
+    const conflictingAppointments = appointments.filter(existing => {
+      if (existing.date !== date) return false;
+
+      const [existHour, existMinute] = existing.time.split(':').map(Number);
+      const existStart = existHour * 60 + existMinute;
+      const existEnd = existStart + (existing.duration || 60);
+
+      // Проверяем пересечение интервалов
+      return (newStart < existEnd && newEnd > existStart);
+    });
+
+    return {
+      available: conflictingAppointments.length === 0,
+      conflictingAppointments
+    };
+  };
+
+  // Функция для поиска доступных слотов с учетом длительности
+  const findAvailableSlots = (date, duration, timeSlots) => {
+    const availableSlots = [];
+    
+    timeSlots.forEach(time => {
+      const [hour, minute] = time.split(':').map(Number);
+      const slotStart = hour * 60 + minute;
+      const slotEnd = slotStart + duration;
+
+      // Проверяем, не выходит ли за пределы рабочего дня (до 20:00)
+      if (slotEnd > 20 * 60) return;
+
+      // Проверяем пересечения с существующими записями
+      const hasConflict = appointments.some(existing => {
+        if (existing.date !== date) return false;
+
+        const [existHour, existMinute] = existing.time.split(':').map(Number);
+        const existStart = existHour * 60 + existMinute;
+        const existEnd = existStart + (existing.duration || 60);
+
+        return (slotStart < existEnd && slotEnd > existStart);
+      });
+
+      if (!hasConflict) {
+        availableSlots.push(time);
+      }
+    });
+
+    return availableSlots;
+  };
+
   const addAppointment = async (appointment) => {
   const newAppointment = {
     id: Date.now().toString(),
     ...appointment,
-    createdAt: new Date().toISOString()
+    status: 'scheduled', // По умолчанию "запланирована"
+    createdAt: new Date().toISOString(),
+    financeRecorded: false
   };
   
-  // Преобразуем время начала в минуты для удобства сравнения
+  // Проверяем доступность времени (только с неотмененными записями)
+  const activeAppointments = appointments.filter(a => a.status !== 'cancelled');
+  
   const [startHour, startMinute] = appointment.time.split(':').map(Number);
   const newStart = startHour * 60 + startMinute;
   const newEnd = newStart + appointment.duration;
 
-  // Проверяем все существующие записи на выбранную дату
-  const isAvailable = !appointments.some(existing => {
-    // Проверяем только записи на ту же дату
+  const isAvailable = !activeAppointments.some(existing => {
     if (existing.date !== appointment.date) return false;
 
-    // Преобразуем время существующей записи в минуты
     const [existHour, existMinute] = existing.time.split(':').map(Number);
     const existStart = existHour * 60 + existMinute;
-    const existEnd = existStart + (existing.duration || 60); // если нет длительности, ставим 60 минут
+    const existEnd = existStart + (existing.duration || 60);
 
-    // Проверяем пересечение временных интервалов
-    // Новый интервал пересекается с существующим, если:
-    // - новое начало раньше конца существующего И новое окончание позже начала существующего
-    const isOverlapping = (newStart < existEnd && newEnd > existStart);
-    
-    if (isOverlapping) {
-      console.log(`Конфликт: ${appointment.time}-${newEnd} с ${existing.time}-${existEnd}`);
-    }
-    
-    return isOverlapping;
+    return (newStart < existEnd && newEnd > existStart);
   });
 
   if (isAvailable) {
@@ -104,63 +149,123 @@ export const AppProvider = ({ children }) => {
   return false;
 };
 
-  // Material methods
+  // Добавьте эту функцию в AppContext.js после addAppointment
+
+const updateAppointmentStatus = async (appointmentId, newStatus) => {
+  const updatedAppointments = appointments.map(app => {
+    if (app.id === appointmentId) {
+      return { 
+        ...app, 
+        status: newStatus,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    return app;
+  });
+  
+  setAppointments(updatedAppointments);
+  await AsyncStorage.setItem('appointments', JSON.stringify(updatedAppointments));
+  
+  // Если статус изменен на "завершена", добавляем запись в финансы (если еще не добавлена)
+  if (newStatus === 'completed') {
+    const appointment = appointments.find(a => a.id === appointmentId);
+    if (appointment && !appointment.financeRecorded) {
+      const financeRecord = {
+        id: Date.now().toString() + '_finance',
+        type: 'income',
+        category: 'service',
+        amount: appointment.price,
+        description: `Услуга: ${appointment.serviceName} - ${appointment.clientName}`,
+        date: appointment.date,
+        owner: appointment.cosmetologistId === 'common' ? 'common' : appointment.cosmetologistId,
+        createdBy: appointment.cosmetologistId,
+        createdAt: new Date().toISOString(),
+        appointmentId: appointment.id
+      };
+      
+      const updatedFinances = [...finances, financeRecord];
+      setFinances(updatedFinances);
+      await AsyncStorage.setItem('finances', JSON.stringify(updatedFinances));
+      
+      // Отмечаем, что финансовая запись создана
+      const appointmentsWithFinanceFlag = updatedAppointments.map(app => {
+        if (app.id === appointmentId) {
+          return { ...app, financeRecorded: true };
+        }
+        return app;
+      });
+      setAppointments(appointmentsWithFinanceFlag);
+      await AsyncStorage.setItem('appointments', JSON.stringify(appointmentsWithFinanceFlag));
+    }
+  }
+  
+  return true;
+};
+
+const deleteAppointment = async (appointmentId) => {
+  const updatedAppointments = appointments.filter(app => app.id !== appointmentId);
+  setAppointments(updatedAppointments);
+  await AsyncStorage.setItem('appointments', JSON.stringify(updatedAppointments));
+  return true;
+};
+
+
+  // Сервисы (услуги)
+  const addService = async (service) => {
+    const newService = {
+      id: Date.now().toString(),
+      ...service,
+      createdAt: new Date().toISOString()
+    };
+    const updated = [...services, newService];
+    setServices(updated);
+    await AsyncStorage.setItem('services', JSON.stringify(updated));
+  };
+
+  const updateService = async (id, updatedService) => {
+    const updated = services.map(s => s.id === id ? { ...s, ...updatedService } : s);
+    setServices(updated);
+    await AsyncStorage.setItem('services', JSON.stringify(updated));
+  };
+
+  const deleteService = async (id) => {
+    const updated = services.filter(s => s.id !== id);
+    setServices(updated);
+    await AsyncStorage.setItem('services', JSON.stringify(updated));
+  };
+
+  const getServicesByUser = (userId) => {
+    return services.filter(s => s.cosmetologistId === userId);
+  };
+
   const addMaterial = async (material) => {
     const newMaterial = {
       id: Date.now().toString(),
       ...material,
       createdAt: new Date().toISOString()
     };
-    const updatedMaterials = [...materials, newMaterial];
-    setMaterials(updatedMaterials);
-    await saveData('materials', updatedMaterials);
+    const updated = [...materials, newMaterial];
+    setMaterials(updated);
+    await AsyncStorage.setItem('materials', JSON.stringify(updated));
   };
 
   const updateMaterialQuantity = async (id, quantity) => {
-    const updatedMaterials = materials.map(m => 
+    const updated = materials.map(m => 
       m.id === id ? { ...m, quantity } : m
     );
-    setMaterials(updatedMaterials);
-    await saveData('materials', updatedMaterials);
+    setMaterials(updated);
+    await AsyncStorage.setItem('materials', JSON.stringify(updated));
   };
 
-  // Client methods
-  const addClient = async (client) => {
-    const newClient = {
-      id: Date.now().toString(),
-      ...client,
-      visits: [],
-      createdAt: new Date().toISOString()
-    };
-    const updatedClients = [...clients, newClient];
-    setClients(updatedClients);
-    await saveData('clients', updatedClients);
-  };
-
-  const addClientVisit = async (clientId, visit) => {
-    const updatedClients = clients.map(c => {
-      if (c.id === clientId) {
-        return {
-          ...c,
-          visits: [...c.visits, { ...visit, id: Date.now().toString() }]
-        };
-      }
-      return c;
-    });
-    setClients(updatedClients);
-    await saveData('clients', updatedClients);
-  };
-
-  // Finance methods
   const addFinanceRecord = async (record) => {
     const newRecord = {
       id: Date.now().toString(),
       ...record,
       createdAt: new Date().toISOString()
     };
-    const updatedFinances = [...finances, newRecord];
-    setFinances(updatedFinances);
-    await saveData('finances', updatedFinances);
+    const updated = [...finances, newRecord];
+    setFinances(updated);
+    await AsyncStorage.setItem('finances', JSON.stringify(updated));
   };
 
   const value = {
@@ -168,7 +273,7 @@ export const AppProvider = ({ children }) => {
     users,
     appointments,
     materials,
-    clients,
+    services,
     finances,
     loading,
     login,
@@ -176,10 +281,15 @@ export const AppProvider = ({ children }) => {
     addAppointment,
     addMaterial,
     updateMaterialQuantity,
-    addClient,
-    addClientVisit,
+    addService,
+    updateService,
+    deleteService,
+    getServicesByUser,
     addFinanceRecord,
-    loadData
+    checkTimeAvailability,
+    findAvailableSlots,
+    updateAppointmentStatus,
+    deleteAppointment
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

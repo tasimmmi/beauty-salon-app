@@ -6,7 +6,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import LoginScreen from '../screens/LoginScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MaterialsScreen from '../screens/MaterialsScreen';
-import ClientsScreen from '../screens/ClientsScreen';
+import ServicesScreen from '../screens/ServicesScreen';
 import FinanceScreen from '../screens/FinanceScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 
@@ -24,7 +24,7 @@ function MainTabs() {
             iconName = 'schedule';
           } else if (route.name === 'Материалы') {
             iconName = 'inventory';
-          } else if (route.name === 'Клиенты') {
+          } else if (route.name === 'Услуги') {
             iconName = 'people';
           } else if (route.name === 'Финансы') {
             iconName = 'account-balance-wallet';
@@ -47,7 +47,7 @@ function MainTabs() {
     >
       <Tab.Screen name="Расписание" component={ScheduleScreen} />
       <Tab.Screen name="Материалы" component={MaterialsScreen} />
-      <Tab.Screen name="Клиенты" component={ClientsScreen} />
+      <Tab.Screen name="Услуги" component={ServicesScreen} />
       <Tab.Screen name="Финансы" component={FinanceScreen} />
       <Tab.Screen name="Отчеты" component={ReportsScreen} />
     </Tab.Navigator>
