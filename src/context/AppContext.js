@@ -62,27 +62,47 @@ export const AppProvider = ({ children }) => {
 
   // Appointment methods
   const addAppointment = async (appointment) => {
-    const newAppointment = {
-      id: Date.now().toString(),
-      ...appointment,
-      createdAt: new Date().toISOString()
-    };
-    
-    // Check if time slot is available
-    const isAvailable = !appointments.some(a => 
-      a.date === appointment.date && 
-      a.time === appointment.time && 
-      a.cosmetologistId === appointment.cosmetologistId
-    );
-
-    if (isAvailable) {
-      const updatedAppointments = [...appointments, newAppointment];
-      setAppointments(updatedAppointments);
-      await saveData('appointments', updatedAppointments);
-      return true;
-    }
-    return false;
+  const newAppointment = {
+    id: Date.now().toString(),
+    ...appointment,
+    createdAt: new Date().toISOString()
   };
+  
+  // Преобразуем время начала в минуты для удобства сравнения
+  const [startHour, startMinute] = appointment.time.split(':').map(Number);
+  const newStart = startHour * 60 + startMinute;
+  const newEnd = newStart + appointment.duration;
+
+  // Проверяем все существующие записи на выбранную дату
+  const isAvailable = !appointments.some(existing => {
+    // Проверяем только записи на ту же дату
+    if (existing.date !== appointment.date) return false;
+
+    // Преобразуем время существующей записи в минуты
+    const [existHour, existMinute] = existing.time.split(':').map(Number);
+    const existStart = existHour * 60 + existMinute;
+    const existEnd = existStart + (existing.duration || 60); // если нет длительности, ставим 60 минут
+
+    // Проверяем пересечение временных интервалов
+    // Новый интервал пересекается с существующим, если:
+    // - новое начало раньше конца существующего И новое окончание позже начала существующего
+    const isOverlapping = (newStart < existEnd && newEnd > existStart);
+    
+    if (isOverlapping) {
+      console.log(`Конфликт: ${appointment.time}-${newEnd} с ${existing.time}-${existEnd}`);
+    }
+    
+    return isOverlapping;
+  });
+
+  if (isAvailable) {
+    const updated = [...appointments, newAppointment];
+    setAppointments(updated);
+    await AsyncStorage.setItem('appointments', JSON.stringify(updated));
+    return true;
+  }
+  return false;
+};
 
   // Material methods
   const addMaterial = async (material) => {

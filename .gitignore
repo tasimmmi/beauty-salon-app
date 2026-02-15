@@ -43,3 +43,4 @@ yarn-error.*
 # my
 src/components/
 src/utils/
+issue.txt

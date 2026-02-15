@@ -43,6 +43,27 @@ export default function ScheduleScreen() {
     });
     return marked;
   };
+  const isTimeSlotAvailable = (time) => {
+    if (!selectedDate) return true;
+    
+    const [checkHour, checkMinute] = time.split(':').map(Number);
+    const checkStart = checkHour * 60 + checkMinute;
+    const checkEnd = checkStart + 60; // Проверяем слот в 1 час
+    
+    // Проверяем все записи на выбранную дату
+    const dayAppointments = appointments.filter(app => 
+        app.date === selectedDate
+    );
+    
+    return !dayAppointments.some(existing => {
+        const [existHour, existMinute] = existing.time.split(':').map(Number);
+        const existStart = existHour * 60 + existMinute;
+        const existEnd = existStart + (existing.duration || 60);
+        
+        // Проверяем пересечение
+        return (checkStart < existEnd && checkEnd > existStart);
+    });
+    };
 
   const getAppointmentsForDate = (date) => {
     return appointments.filter(app => 
@@ -82,6 +103,39 @@ export default function ScheduleScreen() {
       Alert.alert('Ошибка', 'Это время уже занято');
     }
   };
+
+    const getTimeSlotStatus = (time) => {
+    if (!selectedDate) return 'available';
+    
+    const [checkHour, checkMinute] = time.split(':').map(Number);
+    const checkStart = checkHour * 60 + checkMinute;
+    const checkEnd = checkStart + 60; // Проверяем слот в 1 час
+    
+    // Находим все пересекающиеся записи
+    const overlappingAppointments = appointments.filter(app => 
+        app.date === selectedDate && (() => {
+        const [existHour, existMinute] = app.time.split(':').map(Number);
+        const existStart = existHour * 60 + existMinute;
+        const existEnd = existStart + (app.duration || 60);
+        return (checkStart < existEnd && checkEnd > existStart);
+        })()
+    );
+
+    if (overlappingAppointments.length === 0) {
+        return 'available';
+    }
+
+    // Проверяем, есть ли среди пересекающихся записей запись текущего косметолога
+    const hasCurrentUserAppointment = overlappingAppointments.some(
+        app => app.cosmetologistId === currentUser?.id
+    );
+
+    if (hasCurrentUserAppointment) {
+        return 'busy_self';
+    } else {
+        return 'busy_other';
+    }
+    };
 
   const renderAppointmentItem = ({ item }) => (
     <TouchableOpacity 
@@ -173,26 +227,59 @@ export default function ScheduleScreen() {
                 onChangeText={(text) => setNewAppointment({...newAppointment, service: text})}
               />
               
-              <View style={styles.pickerContainer}>
-                <Text style={styles.label}>Время:</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {timeSlots.map((time) => (
-                    <TouchableOpacity
-                      key={time}
-                      style={[
-                        styles.timeSlot,
-                        newAppointment.time === time && styles.selectedTimeSlot
-                      ]}
-                      onPress={() => setNewAppointment({...newAppointment, time})}
+              <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Время</Text>
+                    <ScrollView 
+                        horizontal 
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.timeSlotsScrollContent}
                     >
-                      <Text style={[
-                        styles.timeSlotText,
-                        newAppointment.time === time && styles.selectedTimeSlotText
-                      ]}>{time}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+                        <View style={styles.timeSlotsRow}>
+                        {timeSlots.map((time) => {
+                            const status = getTimeSlotStatus(time);
+                            const isAvailable = status === 'available';
+                            const isSelected = newAppointment.time === time;
+                            
+                            let slotStyle = styles.timeSlot;
+                            let textStyle = styles.timeSlotText;
+                            let statusText = '';
+                            
+                            if (!isAvailable) {
+                            if (status === 'busy_self') {
+                                slotStyle = [styles.timeSlot, styles.busyOtherSlot];
+                                textStyle = [styles.timeSlotText, styles.busyOtherText];
+                            } else if (status === 'busy_other') {
+                                slotStyle = [styles.timeSlot, styles.busySelfSlot];
+                                textStyle = [styles.timeSlotText, styles.busySelfText];
+                            }
+                            statusText = 'занято';
+                            }
+                            
+                            if (isSelected) {
+                            slotStyle = [styles.timeSlot, styles.selectedTimeSlot];
+                            textStyle = [styles.timeSlotText, styles.selectedTimeSlotText];
+                            }
+                            
+                            return (
+                            <TouchableOpacity
+                                key={time}
+                                style={slotStyle}
+                                onPress={() => isAvailable && setNewAppointment({...newAppointment, time})}
+                                disabled={!isAvailable}
+                            >
+                                <Text style={textStyle}>{time}</Text>
+                                {!isAvailable && (
+                                <Text style={[
+                                    styles.bookedText,
+                                    status === 'busy_self' ? styles.bookedOtherText : styles.bookedSelfText
+                                ]}>{statusText}</Text>
+                                )}
+                            </TouchableOpacity>
+                            );
+                        })}
+                        </View>
+                    </ScrollView>
+                    </View>
               
               <TextInput
                 style={styles.input}
@@ -544,5 +631,115 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#333'
-  }
+  },
+  disabledTimeSlot: {
+  backgroundColor: '#ffebee',
+  borderColor: '#ffcdd2',
+  opacity: 0.7
+    },
+    disabledTimeSlotText: {
+    color: '#f44336'
+    },
+    bookedText: {
+    fontSize: 8,
+    color: '#f44336',
+    marginTop: 2
+    },
+    timeSlotsScrollContent: {
+  paddingVertical: 5,
+},
+timeSlotsRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+timeSlot: {
+  minWidth: 70,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  backgroundColor: '#f8f9fa',
+  borderRadius: 8,
+  marginRight: 8,
+  borderWidth: 1,
+  borderColor: '#e0e0e0',
+  alignItems: 'center',
+},
+selectedTimeSlot: {
+  backgroundColor: '#9C27B0',
+  borderColor: '#9C27B0',
+},
+disabledTimeSlot: {
+  backgroundColor: '#ffebee',
+  borderColor: '#ffcdd2',
+  opacity: 0.8,
+},
+timeSlotText: {
+  fontSize: 14,
+  color: '#333',
+  fontWeight: '500',
+},
+selectedTimeSlotText: {
+  color: '#fff',
+  fontWeight: '600',
+},
+disabledTimeSlotText: {
+  color: '#f44336',
+},
+bookedText: {
+  fontSize: 9,
+  color: '#f44336',
+  marginTop: 2,
+  fontWeight: '500',
+},
+busySelfSlot: {
+  backgroundColor: '#fff3e0', // светло-оранжевый
+  borderColor: '#ffb74d',
+  opacity: 0.9,
+},
+busySelfText: {
+  color: '#f57c00',
+},
+busyOtherSlot: {
+  backgroundColor: '#ffebee', // светло-красный
+  borderColor: '#ef9a9a',
+  opacity: 0.9,
+},
+busyOtherText: {
+  color: '#d32f2f',
+},
+bookedSelfText: {
+  color: '#f57c00',
+},
+bookedOtherText: {
+  color: '#d32f2f',
+},
+timeSlot: {
+  minWidth: 70,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  backgroundColor: '#f8f9fa',
+  borderRadius: 8,
+  marginRight: 8,
+  borderWidth: 1,
+  borderColor: '#e0e0e0',
+  alignItems: 'center',
+},
+selectedTimeSlot: {
+  backgroundColor: '#9C27B0',
+  borderColor: '#9C27B0',
+},
+timeSlotText: {
+  fontSize: 14,
+  color: '#333',
+  fontWeight: '500',
+},
+selectedTimeSlotText: {
+  color: '#fff',
+  fontWeight: '600',
+},
+bookedText: {
+  fontSize: 8,
+  marginTop: 2,
+  fontWeight: '500',
+},
 });
